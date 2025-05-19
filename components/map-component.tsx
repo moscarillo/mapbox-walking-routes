@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, useCallback } from "react"
 import mapboxgl from "mapbox-gl"
 import "mapbox-gl/dist/mapbox-gl.css"
 import { Button } from "@/components/ui/button"
@@ -18,8 +18,6 @@ import type { FeatureCollection, Polygon } from "geojson"
 // Initialize mapbox
 mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || ""
 
-console.log("JMO Mapbox access token:", mapboxgl.accessToken );
-
 // Route colors
 const ROUTE_COLORS = ["#ff6b6b", "#48dbfb", "#1dd1a1"]
 
@@ -28,6 +26,7 @@ export default function MapComponent() {
   const map = useRef<mapboxgl.Map | null>(null)
   const markerRef = useRef<mapboxgl.Marker | null>(null)
   const waypointMarkersRef = useRef<mapboxgl.Marker[]>([])
+  const stepPopupRef = useRef<mapboxgl.Popup | null>(null)
   const [lng, setLng] = useState(-74.006)
   const [lat, setLat] = useState(40.7128)
   const [zoom, setZoom] = useState(12)
@@ -82,6 +81,26 @@ export default function MapComponent() {
       }
     }
   }, [lng, lat, zoom])
+
+  useEffect(() => {
+    if (!map.current) return
+
+    // Resize map on window resize (especially important for mobile)
+    const handleResize = () => {
+      map.current && map.current.resize()
+    }
+
+    window.addEventListener("resize", handleResize)
+
+    // Resize once after mount to fix initial layout
+    setTimeout(() => {
+      map.current && map.current.resize()
+    }, 300)
+
+    return () => {
+      window.removeEventListener("resize", handleResize)
+    }
+  }, [mapInitialized])
 
   // Handle map click
   const handleMapClick = (e: mapboxgl.MapMouseEvent) => {
@@ -207,8 +226,8 @@ export default function MapComponent() {
   const filterRoutesByDuration = (routes: Route[], maxDuration: number) => {
     // Convert maxDuration from minutes to seconds for comparison
     const maxDurationSeconds = maxDuration * 60
-
-    return routes.filter((route) => route.duration <= maxDurationSeconds)
+    return routes;
+    // return routes.filter((route) => route.duration <= maxDurationSeconds)
   }
 
   // Generate isochrone and routes
@@ -232,13 +251,14 @@ export default function MapComponent() {
     try {
       // Calculate half duration for the isochrone boundary
       // This ensures the round trip will match the total desired duration
-      const halfDuration = Math.max(Math.floor(walkDuration / 2), 5) // Ensure minimum of 5 minutes
+      const halfDuration = Math.max(Math.floor(walkDuration / 3), 5) // Ensure minimum of 5 minutes
 
       console.log(`User selected ${walkDuration} minutes total, using ${halfDuration} minutes for isochrone`)
       setDebugInfo(`Using ${halfDuration} min isochrone for ${walkDuration} min total walk`)
 
       // Get isochrone data using HALF of the user-specified walk duration
       const isochroneResponse = await getIsochrone(lng, lat, halfDuration)
+      
       setIsochroneData(isochroneResponse)
 
       // Add isochrone to map
@@ -304,6 +324,7 @@ export default function MapComponent() {
 
         // Estimate elevation difference based on distance
         const elevationDifference = estimateElevationDifference(route.distance)
+        const steps = route.legs?.[0]?.steps || []
 
         allRoutes.push({
           id: index,
@@ -312,6 +333,7 @@ export default function MapComponent() {
           coordinates: coordinates,
           waypoints: routeWaypoints[index],
           elevationDifference: elevationDifference,
+          steps: steps,
         })
       })
 
@@ -402,22 +424,195 @@ export default function MapComponent() {
 
       return route
     })
-
+    
     setRoutes(newRoutes)
   }
 
+  // Helper to show popup at step location
+  const showStepPopup = useCallback((lngLat: [number, number], instruction: string) => {
+    if (!map.current) return
+
+    // Remove existing popup
+    if (stepPopupRef.current) {
+      stepPopupRef.current.remove()
+      stepPopupRef.current = null
+    }
+
+    stepPopupRef.current = new mapboxgl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 12,
+    })
+      .setLngLat(lngLat)
+      .setHTML(`<div style="font-size:13px;max-width:200px;">${instruction}</div>`)
+      .addTo(map.current)
+  }, [])
+
+  // Helper to hide popup
+  const hideStepPopup = useCallback(() => {
+    if (stepPopupRef.current) {
+      stepPopupRef.current.remove()
+      stepPopupRef.current = null
+    }
+  }, [])
+
   return (
-    <div className="relative w-full h-full">
-      {/* Map container with explicit height */}
+    <div className="flex flex-col md:flex-row w-full h-1/2 md:h-screen">
+      {/* Map container */}
       <div
         ref={mapContainer}
-        className="w-full h-full"
-        style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0 }}
+        className="w-full h-1/2 md:w-2/3 md:h-screen"
+        style={{
+          flex: "1 1 0%",
+          minHeight: 0,
+        }}
       />
 
-      {/* Error message if map fails to load */}
+      {/* Sidebar/card */}
+      <div className="w-full h-1/2 md:w-1/3 md:h-screen bg-white md:bg-transparent shadow-lg md:shadow-none overflow-y-auto fixed bottom-0 left-0 right-0 md:static z-20 max-h-[60vh] md:max-h-none transition-all">
+        <div className="p-2 md:p-4">
+          <Card className="w-full">
+            <CardHeader>
+              <CardTitle>Walking Routes Generator</CardTitle>
+              <CardDescription>
+                Click on the map to set a starting point, adjust your walk duration, then generate three unique round-trip
+                routes.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2 mb-4">
+                <MapPin className="h-5 w-5 text-red-500" />
+                <span>
+                  Starting point: {lng.toFixed(4)}, {lat.toFixed(4)}
+                </span>
+              </div>
+
+              {/* Units toggle */}
+              <div className="flex items-center justify-between mb-4 pb-2 border-b">
+                <Label htmlFor="units-toggle" className="flex items-center gap-2">
+                  <ArrowUpDown className="h-4 w-4" />
+                  <span>Units:</span>
+                </Label>
+                <div className="flex items-center gap-2">
+                  <span className={!useImperial ? "font-medium" : "text-muted-foreground"}>Metric</span>
+                  <Switch id="units-toggle" checked={useImperial} onCheckedChange={handleUnitToggle} />
+                  <span className={useImperial ? "font-medium" : "text-muted-foreground"}>Imperial</span>
+                </div>
+              </div>
+
+              <div className="mb-6 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    <span className="text-sm font-medium">Total Walk Duration:</span>
+                  </div>
+                  <span className="font-medium">{walkDuration} minutes</span>
+                </div>
+
+                <Slider
+                  defaultValue={[30]}
+                  min={10}
+                  max={90}
+                  step={5}
+                  value={[walkDuration]}
+                  onValueChange={handleWalkDurationChange}
+                  className="w-full"
+                />
+
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>10 min</span>
+                  <span>90 min</span>
+                </div>
+              </div>
+
+              <Button onClick={generateRoutes} disabled={loading || !mapInitialized} className="w-full mb-4">
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  "Generate Round-Trip Routes"
+                )}
+              </Button>
+
+              {debugInfo && <p className="text-xs text-blue-600 mb-2">{debugInfo}</p>}
+              {error && mapInitialized && <p className="text-red-500 mt-2 text-sm mb-2">{error}</p>}
+
+              {routes.length > 0 && (
+                <Tabs value={activeRouteIndex} onValueChange={handleTabChange} className="mt-4">
+                  <TabsList className="grid grid-cols-3 mb-2">
+                    {routes.map((_, index) => (
+                      <TabsTrigger key={index} value={index.toString()} className="relative">
+                        <div
+                          className="absolute left-2 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full"
+                          style={{ backgroundColor: ROUTE_COLORS[index] }}
+                        />
+                        Route {index + 1}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+
+                  {routes.map((route, index) => (
+                    <TabsContent key={index} value={index.toString()} className="space-y-2">
+                      <div className="p-3 bg-muted rounded-md">
+                        <div className="font-medium">Route {index + 1} Details:</div>
+                        <div className="text-sm mt-1 space-y-1">
+                          <div className="flex justify-between">
+                            <span>Distance:</span>
+                            <span className="font-medium">{formatDistance(route.distance)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Duration:</span>
+                            <span className="font-medium">{Math.floor(route.duration / 60)} minutes</span>
+                          </div>
+                          {route.elevationDifference && route.elevationDifference > 0 && (
+                            <div className="flex justify-between">
+                              <span>Elevation Change:</span>
+                              <span className="font-medium">{formatElevation(route.elevationDifference)}</span>
+                            </div>
+                          )}
+                          {/*route.steps && route.steps.length > 0 && (
+                            <div className="mt-3 max-h-40 overflow-y-auto pr-2">
+                              <div className="font-semibold mb-1">Step-by-step directions:</div>
+                              <ol className="list-decimal list-inside text-xs space-y-1">
+                                {route.steps.map((step, i) => {
+                                  // Remove "on the walkway" from instruction
+                                  const cleanedInstruction = step.maneuver.instruction.replace(/ on the walkway/gi, "")
+                                  return (
+                                    <li
+                                      key={i}
+                                      style={{ cursor: "pointer" }}
+                                      onMouseEnter={() => {
+                                        if (step.maneuver.location) {
+                                          showStepPopup(step.maneuver.location, cleanedInstruction)
+                                        }
+                                      }}
+                                      onMouseLeave={hideStepPopup}
+                                    >
+                                      {cleanedInstruction}
+                                    </li>
+                                  )
+                                })}
+                              </ol>
+                            </div>
+                          )*/}
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            This is a unique round-trip route that starts and ends at your selected point.
+                          </div>
+                        </div>
+                      </div>
+                    </TabsContent>
+                  ))}
+                </Tabs>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+      {/* Error overlay stays on top */}
       {error && !mapInitialized && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-50">
           <div className="bg-white p-6 rounded-lg shadow-lg max-w-md">
             <h2 className="text-xl font-bold text-red-600 mb-2">Map Error</h2>
             <p>{error}</p>
@@ -427,121 +622,6 @@ export default function MapComponent() {
           </div>
         </div>
       )}
-
-      <div className="absolute top-4 right-4 z-10">
-        <Card className="w-80">
-          <CardHeader>
-            <CardTitle>Walking Routes Generator</CardTitle>
-            <CardDescription>
-              Click on the map to set a starting point, adjust your walk duration, then generate three unique round-trip
-              routes.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2 mb-4">
-              <MapPin className="h-5 w-5 text-red-500" />
-              <span>
-                Starting point: {lng.toFixed(4)}, {lat.toFixed(4)}
-              </span>
-            </div>
-
-            {/* Units toggle */}
-            <div className="flex items-center justify-between mb-4 pb-2 border-b">
-              <Label htmlFor="units-toggle" className="flex items-center gap-2">
-                <ArrowUpDown className="h-4 w-4" />
-                <span>Units:</span>
-              </Label>
-              <div className="flex items-center gap-2">
-                <span className={!useImperial ? "font-medium" : "text-muted-foreground"}>Metric</span>
-                <Switch id="units-toggle" checked={useImperial} onCheckedChange={handleUnitToggle} />
-                <span className={useImperial ? "font-medium" : "text-muted-foreground"}>Imperial</span>
-              </div>
-            </div>
-
-            <div className="mb-6 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  <span className="text-sm font-medium">Total Walk Duration:</span>
-                </div>
-                <span className="font-medium">{walkDuration} minutes</span>
-              </div>
-
-              <Slider
-                defaultValue={[30]}
-                min={10}
-                max={90}
-                step={5}
-                value={[walkDuration]}
-                onValueChange={handleWalkDurationChange}
-                className="w-full"
-              />
-
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>10 min</span>
-                <span>90 min</span>
-              </div>
-            </div>
-
-            <Button onClick={generateRoutes} disabled={loading || !mapInitialized} className="w-full mb-4">
-              {loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                "Generate Round-Trip Routes"
-              )}
-            </Button>
-
-            {debugInfo && <p className="text-xs text-blue-600 mb-2">{debugInfo}</p>}
-            {error && mapInitialized && <p className="text-red-500 mt-2 text-sm mb-2">{error}</p>}
-
-            {routes.length > 0 && (
-              <Tabs value={activeRouteIndex} onValueChange={handleTabChange} className="mt-4">
-                <TabsList className="grid grid-cols-3 mb-2">
-                  {routes.map((_, index) => (
-                    <TabsTrigger key={index} value={index.toString()} className="relative">
-                      <div
-                        className="absolute left-2 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full"
-                        style={{ backgroundColor: ROUTE_COLORS[index] }}
-                      />
-                      Route {index + 1}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-
-                {routes.map((route, index) => (
-                  <TabsContent key={index} value={index.toString()} className="space-y-2">
-                    <div className="p-3 bg-muted rounded-md">
-                      <div className="font-medium">Route {index + 1} Details:</div>
-                      <div className="text-sm mt-1 space-y-1">
-                        <div className="flex justify-between">
-                          <span>Distance:</span>
-                          <span className="font-medium">{formatDistance(route.distance)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Duration:</span>
-                          <span className="font-medium">{Math.floor(route.duration / 60)} minutes</span>
-                        </div>
-                        {route.elevationDifference && route.elevationDifference > 0 && (
-                          <div className="flex justify-between">
-                            <span>Elevation Change:</span>
-                            <span className="font-medium">{formatElevation(route.elevationDifference)}</span>
-                          </div>
-                        )}
-                        <div className="mt-2 text-xs text-muted-foreground">
-                          This is a unique round-trip route that starts and ends at your selected point.
-                        </div>
-                      </div>
-                    </div>
-                  </TabsContent>
-                ))}
-              </Tabs>
-            )}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   )
 }

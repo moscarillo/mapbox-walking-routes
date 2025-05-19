@@ -24,7 +24,7 @@ export async function getIsochrone(lng: number, lat: number, minutes: number): P
 export async function getDirections(
   start: [number, number],
   waypoints: [number, number][],
-  profile: "walking" | "cycling" | "driving" = "walking",
+  profile: "walking",
 ) {
   // Create a coordinates string with start, all waypoints, and start again
   const coordinates = [
