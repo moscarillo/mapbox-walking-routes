@@ -3,7 +3,7 @@ import type * as GeoJSON from "geojson"
 // Function to get isochrone data from Mapbox API
 export async function getIsochrone(lng: number, lat: number, minutes: number): Promise<GeoJSON.FeatureCollection> {
   const profile = "walking"
-  const url = `https://api.mapbox.com/isochrone/v1/mapbox/${profile}/${lng},${lat}?contours_minutes=${minutes}&polygons=true&access_token=${process.env.MAPBOX_ACCESS_TOKEN}`
+  const url = `https://api.mapbox.com/isochrone/v1/mapbox/${profile}/${lng},${lat}?contours_minutes=${minutes}&polygons=true&access_token=${process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN}`
 
   try {
     const response = await fetch(url)
@@ -34,7 +34,7 @@ export async function getDirections(
   ].join(";")
 
   // Use standard parameters without tidy=false
-  const url = `https://api.mapbox.com/directions/v5/mapbox/${profile}/${coordinates}?geometries=geojson&steps=true&alternatives=false&access_token=${process.env.MAPBOX_ACCESS_TOKEN}`
+  const url = `https://api.mapbox.com/directions/v5/mapbox/${profile}/${coordinates}?geometries=geojson&steps=true&alternatives=false&access_token=${process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN}`
 
   try {
     const response = await fetch(url)

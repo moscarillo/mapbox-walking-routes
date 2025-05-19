@@ -16,7 +16,9 @@ import type { Route } from "@/lib/types"
 import type { FeatureCollection, Polygon } from "geojson"
 
 // Initialize mapbox
-mapboxgl.accessToken = process.env.MAPBOX_ACCESS_TOKEN || ""
+mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || ""
+
+console.log("JMO Mapbox access token:", mapboxgl.accessToken );
 
 // Route colors
 const ROUTE_COLORS = ["#ff6b6b", "#48dbfb", "#1dd1a1"]
